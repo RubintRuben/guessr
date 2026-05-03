@@ -1,0 +1,2024 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>GeoKereső Pro - Mobile Camera Moments</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Leaflet: CSS + JS is REQUIRED. The old file missed the JS, causing: L is not defined. -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
+  <!-- PeerJS: no Firebase config needed. Uses the public PeerJS broker for signaling. -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.5/peerjs.min.js"></script>
+
+  <!-- Icons -->
+  <script src="https://unpkg.com/@phosphor-icons/web"></script>
+
+  <!-- Google Street View. If Google blocks keyless usage in your environment, the game falls back to a preview map. -->
+  <script src="https://maps.googleapis.com/maps/api/js?v=weekly&libraries=geometry"></script>
+
+  <style>
+    :root {
+      --bg: #07111f;
+      --panel: rgba(15, 23, 42, 0.78);
+      --panel-strong: rgba(15, 23, 42, 0.94);
+      --line: rgba(255, 255, 255, 0.10);
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --blue: #3b82f6;
+      --green: #22c55e;
+      --red: #ef4444;
+      --yellow: #f59e0b;
+    }
+
+    html, body {
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 15% 10%, rgba(59,130,246,.20), transparent 26rem),
+        radial-gradient(circle at 85% 80%, rgba(34,197,94,.13), transparent 28rem),
+        var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    button, input { font: inherit; }
+
+    .glass {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      box-shadow: 0 22px 70px rgba(0,0,0,.38);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+    }
+
+    .card-strong { background: var(--panel-strong); border: 1px solid var(--line); }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #2563eb, #60a5fa);
+      color: white;
+      font-weight: 900;
+      border: 0;
+      transition: transform .15s ease, box-shadow .15s ease, opacity .15s ease;
+    }
+    .btn-primary:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 18px 35px rgba(37,99,235,.30); }
+    .btn-primary:disabled { opacity: .45; cursor: not-allowed; transform: none; box-shadow: none; }
+
+    .btn-ghost {
+      background: rgba(255,255,255,.08);
+      border: 1px solid rgba(255,255,255,.10);
+      transition: background .15s ease, transform .15s ease;
+    }
+    .btn-ghost:hover { background: rgba(255,255,255,.14); transform: translateY(-1px); }
+
+    .screen { width: 100%; height: 100%; display: none; }
+    .screen.active { display: flex; }
+
+    #pano, #fallback-pano-map {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 0;
+      background: #111827;
+    }
+
+    #fallback-street-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 4;
+      pointer-events: none;
+      display: none;
+      background: linear-gradient(to bottom, rgba(15,23,42,.10), rgba(15,23,42,.55));
+    }
+
+    #fallback-street-overlay .box {
+      position: absolute;
+      left: 50%;
+      bottom: 9rem;
+      transform: translateX(-50%);
+      width: min(92vw, 680px);
+      text-align: center;
+      background: rgba(15,23,42,.82);
+      border: 1px solid rgba(255,255,255,.14);
+      border-radius: 1.35rem;
+      padding: 1.1rem 1.35rem;
+      box-shadow: 0 20px 65px rgba(0,0,0,.45);
+      backdrop-filter: blur(16px);
+    }
+
+    .gm-style-cc, .gmnoprint, .gm-fullscreen-control { display: none !important; }
+
+    #map-wrapper {
+      width: 340px;
+      height: 270px;
+      max-width: calc(100vw - 2rem);
+      max-height: calc(100vh - 9rem);
+      opacity: .92;
+      transform-origin: bottom right;
+      transition: width .18s ease, height .18s ease, opacity .14s ease, transform .14s ease;
+      contain: layout paint size;
+      touch-action: none;
+    }
+    #map-wrapper:hover, #map-wrapper.expanded {
+      width: min(680px, calc(100vw - 2rem));
+      height: min(520px, calc(100vh - 8rem));
+      opacity: 1;
+    }
+
+    .leaflet-container {
+      background: #dbeafe;
+      font: inherit;
+    }
+    .leaflet-tile { filter: none !important; }
+
+    .pin-icon { background: transparent; border: 0; }
+    .pin {
+      width: 30px; height: 30px;
+      background: var(--red);
+      border: 3px solid white;
+      border-radius: 50% 50% 50% 0;
+      transform: rotate(-45deg);
+      box-shadow: 0 8px 20px rgba(0,0,0,.38);
+      position: relative;
+    }
+    .pin::after {
+      content: "";
+      position: absolute;
+      width: 9px; height: 9px;
+      background: white;
+      border-radius: 999px;
+      top: 8px; left: 8px;
+    }
+    .pin.real { background: var(--green); }
+    .pin.me { background: var(--blue); }
+    .pin.other { background: #a855f7; }
+
+    .custom-range {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 12px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, rgba(59,130,246,.95), rgba(34,197,94,.75));
+      outline: none;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.12);
+    }
+    .custom-range::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 26px;
+      height: 26px;
+      border-radius: 999px;
+      background: white;
+      border: 4px solid #3b82f6;
+      box-shadow: 0 8px 24px rgba(0,0,0,.38);
+      cursor: pointer;
+    }
+    .custom-range::-moz-range-thumb {
+      width: 26px;
+      height: 26px;
+      border-radius: 999px;
+      background: white;
+      border: 4px solid #3b82f6;
+      box-shadow: 0 8px 24px rgba(0,0,0,.38);
+      cursor: pointer;
+    }
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      top: 1rem;
+      transform: translateX(-50%) translateY(-150%);
+      z-index: 9999;
+      padding: .85rem 1rem;
+      border-radius: 1rem;
+      background: rgba(15,23,42,.94);
+      border: 1px solid rgba(255,255,255,.14);
+      box-shadow: 0 18px 55px rgba(0,0,0,.36);
+      transition: transform .18s ease;
+      font-weight: 800;
+      max-width: min(92vw, 680px);
+      text-align: center;
+    }
+    .toast.show { transform: translateX(-50%) translateY(0); }
+
+    .scroll-thin::-webkit-scrollbar { width: 8px; }
+    .scroll-thin::-webkit-scrollbar-thumb { background: rgba(148,163,184,.35); border-radius: 999px; }
+
+    @media (max-width: 850px) {
+      #screen-menu .menu-grid, #screen-lobby .lobby-grid, #screen-round-result .result-grid { grid-template-columns: 1fr; }
+      #screen-menu, #screen-lobby, #screen-round-result { overflow-y: auto; align-items: flex-start; padding: .75rem; }
+      #map-wrapper {
+        right: .65rem;
+        bottom: .65rem;
+        width: min(360px, calc(100vw - 1.3rem));
+        height: 260px;
+        opacity: .96;
+      }
+      #map-wrapper:hover, #map-wrapper.expanded {
+        width: calc(100vw - 1.3rem);
+        height: min(52vh, 430px);
+      }
+      #camera-widget {
+        left: .65rem;
+        bottom: calc(260px + 1.15rem);
+        width: min(265px, calc(100vw - 1.3rem));
+      }
+      .camera-preview { width: 72px; height: 54px; }
+      .moment-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); max-height: 150px; }
+      .moment-modal { padding: .45rem; }
+      .moment-viewer-shell { width: 100vw; height: 100dvh; border-radius: 0; }
+      .moment-nav-btn { width: 44px; height: 44px; }
+    }
+
+    .camera-widget {
+      position: absolute;
+      left: 1rem;
+      bottom: 1rem;
+      z-index: 38;
+      width: min(310px, calc(100vw - 2rem));
+    }
+    .camera-preview {
+      width: 86px;
+      height: 64px;
+      border-radius: 1rem;
+      object-fit: cover;
+      background: rgba(15,23,42,.9);
+      border: 1px solid rgba(255,255,255,.12);
+      transform: scaleX(-1);
+    }
+    .moment-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(86px, 1fr));
+      gap: .55rem;
+      max-height: 160px;
+      overflow-y: auto;
+      padding-right: .25rem;
+    }
+    .moment-card {
+      overflow: hidden;
+      border-radius: 1rem;
+      border: 1px solid rgba(255,255,255,.12);
+      background: rgba(15,23,42,.65);
+    }
+    .moment-card img {
+      display: block;
+      width: 100%;
+      height: 74px;
+      object-fit: cover;
+    }
+    .moment-card .caption {
+      padding: .35rem .45rem;
+      font-size: .68rem;
+      font-weight: 900;
+      color: #cbd5e1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .moment-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 120;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0,0,0,.90);
+      padding: 1rem;
+      touch-action: pan-y;
+    }
+    .moment-modal.show { display: flex; }
+    .moment-viewer-shell {
+      position: relative;
+      width: min(96vw, 1180px);
+      height: min(94dvh, 880px);
+      border-radius: 2rem;
+      background: rgba(2,6,23,.78);
+      border: 1px solid rgba(255,255,255,.14);
+      box-shadow: 0 30px 90px rgba(0,0,0,.75);
+      display: grid;
+      grid-template-rows: 1fr auto;
+      overflow: hidden;
+    }
+    .moment-modal img {
+      align-self: center;
+      justify-self: center;
+      max-width: 100%;
+      max-height: calc(94dvh - 110px);
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      border-radius: 1.25rem;
+      user-select: none;
+      -webkit-user-drag: none;
+    }
+    .moment-modal .moment-title {
+      padding: .75rem 4.5rem 1rem;
+      text-align: center;
+      font-weight: 1000;
+      color: #e2e8f0;
+    }
+    .moment-nav-btn {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 54px;
+      height: 54px;
+      border-radius: 999px;
+      background: rgba(15,23,42,.75);
+      border: 1px solid rgba(255,255,255,.16);
+      display: grid;
+      place-items: center;
+      font-size: 1.45rem;
+      font-weight: 1000;
+      backdrop-filter: blur(14px);
+    }
+    .moment-nav-btn:hover { background: rgba(59,130,246,.42); }
+    #moment-modal-prev { left: .75rem; }
+    #moment-modal-next { right: .75rem; }
+    #moment-modal-close {
+      position: absolute;
+      top: .75rem;
+      right: .75rem;
+      width: 44px;
+      height: 44px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      font-size: 1.2rem;
+    }
+
+
+    .camera-consent-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 1200;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+      background: rgba(2,6,23,.72);
+      backdrop-filter: blur(18px);
+    }
+    .camera-consent-modal.show { display: flex; }
+    .camera-consent-box {
+      width: min(94vw, 560px);
+      border-radius: 2rem;
+      border: 1px solid rgba(255,255,255,.12);
+      background: linear-gradient(180deg, rgba(15,23,42,.98), rgba(2,6,23,.96));
+      box-shadow: 0 30px 90px rgba(0,0,0,.55);
+      padding: 1.25rem;
+    }
+    .camera-consent-list {
+      margin-top: .9rem;
+      display: grid;
+      gap: .55rem;
+      color: #cbd5e1;
+      font-size: .92rem;
+      line-height: 1.35;
+    }
+    .camera-consent-list li { display: flex; gap: .55rem; }
+    .camera-consent-list i { margin-top: .12rem; color: #60a5fa; }
+    .camera-help {
+      margin-top: .9rem;
+      border-radius: 1.1rem;
+      border: 1px solid rgba(245,158,11,.22);
+      background: rgba(245,158,11,.08);
+      color: #fde68a;
+      padding: .75rem;
+      font-size: .78rem;
+      line-height: 1.35;
+      font-weight: 700;
+    }
+
+
+  </style>
+</head>
+<body>
+  <div id="toast" class="toast"></div>
+  <div id="moment-modal" class="moment-modal" role="dialog" aria-modal="true" aria-label="Moment nagy nézet">
+    <div class="moment-viewer-shell">
+      <button id="moment-modal-close" class="btn-ghost" aria-label="Bezárás"><i class="ph-bold ph-x"></i></button>
+      <button id="moment-modal-prev" class="moment-nav-btn" aria-label="Előző kép"><i class="ph-bold ph-caret-left"></i></button>
+      <button id="moment-modal-next" class="moment-nav-btn" aria-label="Következő kép"><i class="ph-bold ph-caret-right"></i></button>
+      <img id="moment-modal-img" alt="moment nagyban" />
+      <div id="moment-modal-title" class="moment-title"></div>
+    </div>
+  </div>
+
+
+
+  <div id="camera-consent-modal" class="camera-consent-modal" role="dialog" aria-modal="true" aria-label="Kamera engedély tájékoztató">
+    <div class="camera-consent-box">
+      <div class="flex items-start justify-between gap-3">
+        <div>
+          <h2 class="text-2xl font-black">Kamera moments engedély</h2>
+          <p class="mt-1 text-sm font-bold text-slate-400">Csak akkor indul, ha itt rányomsz az engedélyezésre, majd a böngésző engedélykérésénél is engedélyezed.</p>
+        </div>
+        <button id="camera-consent-close" class="btn-ghost rounded-full w-11 h-11" aria-label="Bezárás"><i class="ph-bold ph-x"></i></button>
+      </div>
+      <ul class="camera-consent-list">
+        <li><i class="ph-bold ph-check-circle"></i><span>A kamera képe csak helyben fut a böngésződben játék közben.</span></li>
+        <li><i class="ph-bold ph-check-circle"></i><span>A játék reakció-pillanatokat készít: arcdetektálással, ha a böngésző támogatja, különben mozgás-alapon.</span></li>
+        <li><i class="ph-bold ph-check-circle"></i><span>Nem azonosít személyt, nem ment fájlba, és a képek a meccs/session végén törlődnek.</span></li>
+        <li><i class="ph-bold ph-check-circle"></i><span>Ha nem engedélyezed, a játék ugyanúgy működik, csak rólad nem készül moments kép.</span></li>
+      </ul>
+      <div id="camera-consent-help" class="camera-help hidden"></div>
+      <div class="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <button id="camera-consent-cancel" class="btn-ghost rounded-2xl py-3 font-black">Mégse</button>
+        <button id="camera-consent-allow" class="btn-primary rounded-2xl py-3 font-black">Értem, kérem az engedélyt</button>
+      </div>
+    </div>
+  </div>
+
+  <main id="app" class="relative w-full h-full">
+    <section id="screen-profile" class="screen active items-center justify-center p-4">
+      <div class="glass w-full max-w-md rounded-[2rem] p-8 sm:p-10 text-center">
+        <div class="mx-auto mb-5 h-24 w-24 rounded-[1.7rem] bg-gradient-to-tr from-blue-600 to-emerald-400 flex items-center justify-center text-5xl shadow-2xl">
+          <i class="ph-fill ph-compass"></i>
+        </div>
+        <h1 class="text-4xl font-black tracking-tight">GeoKereső Pro</h1>
+        <p class="mt-2 text-slate-300">PeerJS multiplayer, Firebase nélkül.</p>
+        <input id="player-name-input" maxlength="18" autocomplete="off" placeholder="Játékosnév"
+               class="mt-8 w-full rounded-2xl border border-white/10 bg-slate-950/50 px-5 py-4 text-center text-xl font-extrabold outline-none focus:border-blue-400" />
+        <button id="btn-save-profile" class="btn-primary mt-4 w-full rounded-2xl py-4 text-lg">Belépés</button>
+        <p class="mt-5 text-xs text-slate-500">Tipp: Chrome/Edge alatt működik a legstabilabban WebRTC miatt.</p>
+      </div>
+    </section>
+
+    <section id="screen-menu" class="screen items-center justify-center p-4">
+      <div class="menu-grid grid w-full max-w-6xl grid-cols-[.42fr_.58fr] gap-5">
+        <aside class="glass rounded-[2rem] p-6">
+          <div class="flex items-center gap-4">
+            <div id="profile-avatar" class="h-16 w-16 rounded-2xl bg-blue-600 flex items-center justify-center text-2xl font-black">J</div>
+            <div>
+              <h2 id="profile-name" class="text-2xl font-black">Játékos</h2>
+              <p id="peer-status" class="text-sm font-bold text-yellow-300">Kapcsolódás...</p>
+            </div>
+          </div>
+
+          <div class="card-strong mt-7 rounded-3xl p-5">
+            <h3 class="text-xs uppercase tracking-[.18em] text-slate-400 font-black">Játék módok</h3>
+            <div class="mt-4 space-y-3 text-sm text-slate-300">
+              <p class="flex gap-2"><i class="ph-bold ph-check-circle text-green-400 mt-1"></i><span>Szobakódos PeerJS multiplayer.</span></p>
+              <p class="flex gap-2"><i class="ph-bold ph-check-circle text-green-400 mt-1"></i><span>Normál színű OpenStreetMap tipp-térkép.</span></p>
+              <p class="flex gap-2"><i class="ph-bold ph-check-circle text-green-400 mt-1"></i><span>Távolság, vonalak, ranglista, podium.</span></p>
+            </div>
+          </div>
+
+          <div class="card-strong mt-5 rounded-3xl p-5">
+            <div class="flex items-center justify-between gap-3">
+              <div>
+                <h3 class="text-xs uppercase tracking-[.18em] text-slate-400 font-black">Kamera moments</h3>
+                <p id="menu-camera-status" class="mt-1 text-xs font-bold text-slate-400">Opcionális · nincs bekapcsolva</p>
+              </div>
+              <i class="ph-bold ph-camera text-2xl text-blue-300"></i>
+            </div>
+            <button id="btn-menu-camera" class="btn-ghost mt-4 w-full rounded-2xl py-3 font-extrabold">Kamera engedélyezése</button>
+            <p class="mt-3 text-[10px] leading-snug text-slate-500">Rányomáskor előbb tájékoztatót mutat. Mobilon HTTPS kell, LAN IP-n a böngésző nem mindig engedi a kamerát.</p>
+          </div>
+
+          <button id="btn-change-name" class="btn-ghost mt-5 w-full rounded-2xl py-3 font-extrabold">Név módosítása</button>
+        </aside>
+
+        <section class="glass relative overflow-hidden rounded-[2rem] p-8 sm:p-12 flex flex-col justify-center">
+          <i class="ph-fill ph-map-trifold absolute -bottom-12 -right-10 text-[20rem] text-white/5"></i>
+          <div class="relative z-10 mx-auto w-full max-w-md text-center">
+            <h1 class="text-5xl sm:text-6xl font-black tracking-tight">Geo<span class="text-blue-400">Kereső</span></h1>
+            <p class="mt-3 text-lg text-slate-300">Hozz létre szobát, küldd el a kódot, és indulhat a játék.</p>
+
+            <div class="mt-10 grid gap-4">
+              <button id="btn-create-room" class="btn-primary rounded-2xl py-4 text-lg flex items-center justify-center gap-2">
+                <i class="ph-bold ph-plus-circle text-2xl"></i> Új szoba létrehozása
+              </button>
+              <button id="btn-show-join" class="btn-ghost rounded-2xl py-4 text-lg font-black flex items-center justify-center gap-2">
+                <i class="ph-bold ph-users-three text-2xl"></i> Csatlakozás szobához
+              </button>
+            </div>
+
+            <div id="join-box" class="mt-5 hidden rounded-3xl border border-white/10 bg-slate-950/50 p-4">
+              <label class="text-xs uppercase tracking-[.18em] text-slate-400 font-black">Szobakód</label>
+              <div class="mt-3 flex gap-2">
+                <input id="room-code-input" maxlength="12" placeholder="pl. AB12"
+                       class="min-w-0 flex-1 rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-center text-xl font-black uppercase outline-none focus:border-blue-400" />
+                <button id="btn-join-room" class="btn-primary rounded-2xl px-5"><i class="ph-bold ph-arrow-right text-xl"></i></button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section id="screen-lobby" class="screen items-center justify-center p-4">
+      <div class="glass w-full max-w-5xl rounded-[2rem] p-6 sm:p-8">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-5 border-b border-white/10 pb-6">
+          <div>
+            <h2 class="text-4xl font-black flex items-center gap-3"><i class="ph-fill ph-users-three text-blue-400"></i> Váróterem</h2>
+            <p id="lobby-subtitle" class="mt-1 text-slate-300">A host indítja a játékot.</p>
+          </div>
+          <button id="room-code-card" class="card-strong rounded-3xl px-7 py-4 text-center hover:bg-slate-800/90 transition">
+            <div class="text-xs uppercase tracking-[.22em] text-slate-400 font-black">Szobakód</div>
+            <div id="lobby-room-code" class="mt-1 text-4xl font-black tracking-[.22em] text-blue-300">----</div>
+            <div class="mt-1 text-xs text-slate-500">katt: másolás</div>
+          </button>
+        </div>
+
+        <div class="lobby-grid mt-6 grid grid-cols-2 gap-5">
+          <div class="card-strong rounded-3xl p-5">
+            <h3 class="text-xs uppercase tracking-[.18em] text-slate-400 font-black">Játékosok (<span id="player-count">0</span>)</h3>
+            <ul id="lobby-players-list" class="scroll-thin mt-4 max-h-[360px] space-y-3 overflow-y-auto pr-2"></ul>
+          </div>
+
+          <div class="card-strong rounded-3xl p-5">
+            <div class="flex items-center justify-between gap-3">
+              <h3 class="text-xs uppercase tracking-[.18em] text-slate-400 font-black">Beállítások</h3>
+              <span id="host-badge" class="rounded-full bg-blue-500/20 px-3 py-1 text-xs font-black text-blue-200">HOST</span>
+            </div>
+
+            <div class="mt-6 space-y-7">
+              <div>
+                <div class="mb-3 flex items-center justify-between">
+                  <label class="font-extrabold">Körök száma</label>
+                  <span id="setting-rounds-val" class="rounded-full bg-white/10 px-3 py-1 font-black">5</span>
+                </div>
+                <input id="setting-rounds" class="custom-range" type="range" min="3" max="10" value="5" />
+              </div>
+
+              <div>
+                <div class="mb-3 flex items-center justify-between">
+                  <label class="font-extrabold">Idő / kör</label>
+                  <span id="setting-time-val" class="rounded-full bg-white/10 px-3 py-1 font-black">60 mp</span>
+                </div>
+                <input id="setting-time" class="custom-range" type="range" min="1" max="200" step="1" value="60" />
+              </div>
+
+              <div>
+                <div class="mb-3 flex items-center justify-between">
+                  <label class="font-extrabold">Mozgás Street View-ban</label>
+                  <span id="setting-move-val" class="rounded-full bg-white/10 px-3 py-1 font-black">Be</span>
+                </div>
+                <input id="setting-move" class="custom-range" type="range" min="0" max="1" value="1" />
+              </div>
+
+              <div>
+                <div class="mb-3 flex items-center justify-between">
+                  <label class="font-extrabold">Anti-cheat fókuszvédelem</label>
+                  <span id="setting-anticheat-val" class="rounded-full bg-white/10 px-3 py-1 font-black">Be</span>
+                </div>
+                <input id="setting-anticheat" class="custom-range" type="range" min="0" max="1" value="1" />
+                <p class="mt-2 text-[10px] leading-snug text-slate-500">Ha be van kapcsolva, tab/ablak elhagyásnál a játékos erre a körre automatikusan beküldöttként, 0 pontosként számít.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="mt-6 flex flex-col sm:flex-row justify-between gap-3 border-t border-white/10 pt-6">
+          <button id="btn-leave-room" class="rounded-2xl bg-red-500/15 px-6 py-3 font-black text-red-200 hover:bg-red-500/25">Kilépés</button>
+          <button id="btn-start-game" class="btn-primary rounded-2xl px-8 py-3 text-lg flex items-center justify-center gap-2">
+            <i class="ph-bold ph-play"></i> Játék indítása
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <section id="screen-game" class="screen relative overflow-hidden">
+      <div id="pano"></div>
+      <div id="fallback-pano-map" class="hidden"></div>
+      <div id="fallback-street-overlay">
+        <div class="box">
+          <h3 class="text-xl font-black">Street View nem töltött be ebben a környezetben</h3>
+          <p class="mt-1 text-sm text-slate-300">A játék ettől még működik: a host által kiválasztott hely koordinátája fix, a tipp és az eredmény pontos. Valódi panorámához általában Google Maps API-kulcs szükséges.</p>
+        </div>
+      </div>
+
+      <div class="absolute left-0 top-0 z-20 w-full p-4 pointer-events-none">
+        <div class="mx-auto flex w-fit items-center gap-7 rounded-full glass px-6 py-3 pointer-events-auto">
+          <div class="text-center"><div class="text-[10px] uppercase tracking-widest text-slate-400 font-black">Kör</div><div class="text-2xl font-black"><span id="hud-round">1</span><span id="hud-round-total" class="text-sm text-slate-400">/5</span></div></div>
+          <div class="text-center"><div class="text-[10px] uppercase tracking-widest text-slate-400 font-black">Idő</div><div id="hud-timer" class="text-3xl font-black tabular-nums text-blue-200">60</div></div>
+          <div class="text-center"><div class="text-[10px] uppercase tracking-widest text-slate-400 font-black">Pont</div><div id="hud-score" class="text-2xl font-black text-yellow-300">0</div></div>
+        </div>
+        <div class="mx-auto mt-3 h-2 max-w-md overflow-hidden rounded-full bg-slate-950/60">
+          <div id="timer-progress" class="h-full w-full bg-blue-500 transition-[width] duration-1000 linear"></div>
+        </div>
+      </div>
+
+      <div id="waiting-for-others" class="absolute inset-0 z-30 hidden flex-col items-center justify-center bg-slate-950/55 backdrop-blur-sm">
+        <i class="ph-fill ph-check-circle text-8xl text-green-400"></i>
+        <h3 class="mt-4 text-4xl font-black">Tipp rögzítve</h3>
+        <p id="guess-status-text" class="mt-2 rounded-full bg-slate-950/70 px-5 py-2 font-black text-slate-200">1 / 1 tippelt</p>
+      </div>
+
+      <div id="anti-cheat-overlay" class="absolute inset-0 z-[80] hidden flex-col items-center justify-center bg-black text-center px-6">
+        <i class="ph-bold ph-eye-slash text-8xl text-red-400"></i>
+        <h2 class="mt-5 text-4xl sm:text-6xl font-black tracking-tight">nem cheatelunk brosky!</h2>
+        <p class="mt-4 max-w-xl text-lg font-bold text-slate-300">Ebben a körben a tipped le lett tiltva. A következő helyszínnél újra játszhatsz.</p>
+      </div>
+
+
+      <div id="camera-widget" class="camera-widget glass rounded-[1.4rem] p-3">
+        <div class="flex items-center gap-3">
+          <video id="moments-video" class="camera-preview hidden" autoplay muted playsinline></video>
+          <div class="min-w-0 flex-1">
+            <div class="flex items-center gap-2 text-sm font-black"><i class="ph-bold ph-camera"></i> Moments</div>
+            <div id="camera-status" class="mt-1 text-xs font-bold text-slate-400">Kamera opcionális</div>
+          </div>
+        </div>
+        <div class="mt-3 grid grid-cols-2 gap-2">
+          <button id="btn-camera-toggle" class="btn-ghost rounded-xl px-3 py-2 text-xs font-black">Kamera engedély</button>
+          <button id="btn-capture-moment" class="btn-ghost rounded-xl px-3 py-2 text-xs font-black" disabled>Pillanat</button>
+        </div>
+        <p class="mt-2 text-[10px] leading-snug text-slate-500">Csak engedéllyel működik. Nem ment fájlba; a képek meccs után törlődnek. Nincs arcfelismerés.</p>
+      </div>
+
+      <div id="map-wrapper" class="glass absolute bottom-6 right-6 z-40 flex flex-col overflow-hidden rounded-[1.4rem] border-2 border-white/10">
+        <div class="flex items-center justify-between bg-slate-950/85 px-4 py-2">
+          <button id="btn-toggle-map" class="flex items-center gap-2 font-black"><i class="ph-bold ph-map-trifold"></i> Tipp térkép</button>
+          <button id="btn-reset-guess-map" class="rounded-full bg-white/10 px-3 py-1 text-xs font-black hover:bg-white/20">reset</button>
+        </div>
+        <div id="guess-map" class="min-h-0 flex-1 cursor-crosshair"></div>
+        <div class="bg-slate-950/90 p-3">
+          <button id="btn-make-guess" class="btn-primary w-full rounded-2xl py-3 text-lg" disabled>Tegyél tippet a térképen</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="screen-round-result" class="screen items-center justify-center p-4">
+      <div class="glass flex h-[88vh] w-full max-w-7xl flex-col rounded-[2rem] p-5 sm:p-6">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/10 pb-4">
+          <h2 class="text-3xl sm:text-4xl font-black">Kör eredménye</h2>
+          <div class="rounded-full bg-green-500/15 px-4 py-2 text-sm font-black text-green-200">Helyes válasz: <span id="correct-location-name">Betöltés...</span></div>
+        </div>
+
+        <div class="result-grid mt-5 grid min-h-0 flex-1 grid-cols-[.67fr_.33fr] gap-5">
+          <div class="flex min-h-0 flex-col gap-4">
+            <div id="result-map" class="min-h-[330px] flex-1 overflow-hidden rounded-3xl border border-white/10 bg-slate-800"></div>
+            <div class="grid grid-cols-3 gap-3">
+              <div class="card-strong rounded-2xl p-4"><div class="text-xs uppercase tracking-wider text-slate-400 font-black">Távolságod</div><div id="round-distance" class="mt-1 text-2xl font-black">--</div></div>
+              <div class="card-strong rounded-2xl p-4"><div class="text-xs uppercase tracking-wider text-slate-400 font-black">Kör pont</div><div id="round-points" class="mt-1 text-2xl font-black text-green-300">--</div></div>
+              <div class="card-strong rounded-2xl p-4"><div class="text-xs uppercase tracking-wider text-slate-400 font-black">Pontosság</div><div id="round-accuracy" class="mt-1 text-2xl font-black text-blue-300">--</div></div>
+            </div>
+          </div>
+          <aside class="flex min-h-0 flex-col">
+            <div class="card-strong flex min-h-0 flex-1 flex-col rounded-3xl p-4">
+              <h3 class="text-xs uppercase tracking-[.18em] text-slate-400 font-black">Ranglista</h3>
+              <ul id="round-leaderboard" class="scroll-thin mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto pr-2"></ul>
+
+              <div class="mt-4 border-t border-white/10 pt-4">
+                <div class="mb-2 flex items-center justify-between gap-2">
+                  <h3 class="text-xs uppercase tracking-[.18em] text-slate-400 font-black">Top moments</h3>
+                  <span id="moments-count" class="rounded-full bg-white/10 px-2 py-1 text-[10px] font-black text-slate-300">0</span>
+                </div>
+                <div id="moments-grid" class="moment-grid scroll-thin"></div>
+              </div>
+            </div>
+            <button id="btn-next-round" class="btn-primary mt-4 rounded-2xl py-4 text-lg">Következő kör</button>
+          </aside>
+        </div>
+      </div>
+    </section>
+
+    <section id="screen-final-result" class="screen items-center justify-center p-4">
+      <div class="glass w-full max-w-5xl rounded-[2rem] p-8 text-center">
+        <h1 class="text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-yellow-300 via-orange-400 to-red-400">Végeredmény</h1>
+        <div id="podium-container" class="mx-auto mt-10 flex h-72 max-w-3xl items-end justify-center gap-3 border-b border-white/10 pb-5"></div>
+        <ul id="final-leaderboard" class="mx-auto mt-6 max-w-2xl space-y-2 text-left"></ul>
+        <button id="btn-back-menu" class="btn-primary mt-8 rounded-2xl px-10 py-4 text-lg">Vissza a főmenübe</button>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    "use strict";
+
+    const TILE_NORMAL = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
+    const TILE_ATTR = "&copy; OpenStreetMap contributors";
+
+    const LOCATIONS = [
+      { name: "Times Square, New York", lat: 40.75802, lng: -73.98554, heading: 40 },
+      { name: "Eiffel-torony, Párizs", lat: 48.85837, lng: 2.29448, heading: 20 },
+      { name: "Shibuya Crossing, Tokió", lat: 35.65950, lng: 139.70054, heading: 80 },
+      { name: "Sydney Operaház", lat: -33.85678, lng: 151.21530, heading: 285 },
+      { name: "Westminster Bridge, London", lat: 51.50073, lng: -0.12463, heading: 290 },
+      { name: "Colosseum, Róma", lat: 41.89021, lng: 12.49223, heading: 25 },
+      { name: "Copacabana, Rio de Janeiro", lat: -22.97110, lng: -43.18224, heading: 50 },
+      { name: "Hősök tere, Budapest", lat: 47.51492, lng: 19.07710, heading: 300 },
+      { name: "Lánchíd, Budapest", lat: 47.49900, lng: 19.04370, heading: 100 },
+      { name: "Hallgrímskirkja, Reykjavík", lat: 64.14172, lng: -21.92662, heading: 20 },
+      { name: "Sagrada Família, Barcelona", lat: 41.40363, lng: 2.17436, heading: 120 },
+      { name: "Brandenburgi kapu, Berlin", lat: 52.51628, lng: 13.37770, heading: 95 },
+      { name: "Golden Gate Bridge, San Francisco", lat: 37.81993, lng: -122.47830, heading: 170 },
+      { name: "CN Tower, Toronto", lat: 43.64257, lng: -79.38705, heading: 300 },
+      { name: "Taj Mahal, Agra", lat: 27.17514, lng: 78.04214, heading: 0 },
+      { name: "Table Mountain, Fokváros", lat: -33.96282, lng: 18.40984, heading: 250 },
+      { name: "Merdeka Square, Kuala Lumpur", lat: 3.14958, lng: 101.69370, heading: 65 },
+      { name: "Prágai Óvárosi tér", lat: 50.08747, lng: 14.42125, heading: 180 },
+      { name: "Amszterdam, Dam tér", lat: 52.37310, lng: 4.89220, heading: 100 },
+      { name: "Lisszabon, Praça do Comércio", lat: 38.70775, lng: -9.13659, heading: 190 }
+    ];
+
+    const app = {
+      peer: null,
+      myPeerId: null,
+      playerId: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random(),
+      playerName: localStorage.getItem("geoPlayerName") || "",
+      isHost: false,
+      roomCode: null,
+      hostConn: null,
+      conns: new Map(),
+      state: null,
+      guessMap: null,
+      guessMarker: null,
+      resultMap: null,
+      resultLayers: [],
+      fallbackMap: null,
+      streetView: null,
+      currentGuess: null,
+      timer: null,
+      svTimeout: null,
+      hasSubmitted: false,
+      cheatLockedRound: null,
+      hostRoundCloser: null,
+      antiCheatPoller: null,
+      lastCheatSignalAt: 0,
+      cameraStream: null,
+      cameraEnabled: false,
+      cameraLoop: null,
+      faceDetector: null,
+      faceDetectionEnabled: false,
+      lastFaceMetric: null,
+      cameraConsentSeen: false,
+      momentCanvas: null,
+      motionCanvas: null,
+      lastMotionFrame: null,
+      lastMomentAt: 0,
+      momentViewerItems: [],
+      momentViewerIndex: 0,
+      settings: { rounds: 5, timePerRound: 60, move: true, antiCheat: true }
+    };
+
+    const $ = (id) => document.getElementById(id);
+
+    function toast(message) {
+      const el = $("toast");
+      el.textContent = message;
+      el.classList.add("show");
+      clearTimeout(toast._t);
+      toast._t = setTimeout(() => el.classList.remove("show"), 2600);
+    }
+
+    function showScreen(id) {
+      document.querySelectorAll(".screen").forEach(s => s.classList.toggle("active", s.id === id));
+      setTimeout(() => {
+        if (id === "screen-game" && app.guessMap) refreshMapTiles(app.guessMap);
+        if (id === "screen-round-result" && app.resultMap) refreshMapTiles(app.resultMap);
+        if (id === "screen-game" && app.fallbackMap) refreshMapTiles(app.fallbackMap);
+      }, 250);
+    }
+
+    function safeName(name) {
+      return String(name || "Játékos").trim().slice(0, 18) || "Játékos";
+    }
+
+    function updateProfileUI() {
+      app.playerName = safeName(app.playerName);
+      $("profile-name").textContent = app.playerName;
+      $("profile-avatar").textContent = app.playerName.charAt(0).toUpperCase();
+      $("player-name-input").value = app.playerName;
+    }
+
+    function shuffle(array) {
+      const a = [...array];
+      for (let i = a.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [a[i], a[j]] = [a[j], a[i]];
+      }
+      return a;
+    }
+
+    function roomCode() {
+      return Math.random().toString(36).slice(2, 6).toUpperCase();
+    }
+
+    function peerIdFromCode(code) {
+      return "geokereso-pro-" + String(code).trim().toLowerCase();
+    }
+
+    function distanceKm(lat1, lon1, lat2, lon2) {
+      const R = 6371;
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLon/2)**2;
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    }
+
+    function scoreFromDistance(km) {
+      if (!Number.isFinite(km)) return 0;
+      if (km <= 0.05) return 5000;
+      return Math.max(0, Math.round(5000 * Math.exp(-km / 1850)));
+    }
+
+    function formatDistance(km) {
+      if (!Number.isFinite(km)) return "Nincs tipp";
+      if (km < 1) return Math.round(km * 1000) + " m";
+      if (km < 10) return km.toFixed(1) + " km";
+      return Math.round(km).toLocaleString("hu-HU") + " km";
+    }
+
+    function makePin(type = "") {
+      return L.divIcon({ className: "pin-icon", html: `<div class="pin ${type}"></div>`, iconSize: [30, 42], iconAnchor: [15, 42] });
+    }
+
+    function initPeer(id) {
+      if (app.peer && !app.peer.destroyed) app.peer.destroy();
+      app.peer = new Peer(id || undefined, { debug: 0 });
+
+      app.peer.on("open", (peerId) => {
+        app.myPeerId = peerId;
+        $("peer-status").textContent = "Online";
+        $("peer-status").className = "text-sm font-bold text-green-300";
+      });
+
+      app.peer.on("connection", (conn) => {
+        if (!app.isHost) {
+          conn.close();
+          return;
+        }
+        setupHostIncoming(conn);
+      });
+
+      app.peer.on("error", (err) => {
+        console.error(err);
+        $("peer-status").textContent = "PeerJS hiba";
+        $("peer-status").className = "text-sm font-bold text-red-300";
+        toast("PeerJS hiba: " + (err.type || err.message || "ismeretlen"));
+      });
+
+      app.peer.on("disconnected", () => {
+        $("peer-status").textContent = "Újracsatlakozás...";
+        $("peer-status").className = "text-sm font-bold text-yellow-300";
+        try { app.peer.reconnect(); } catch (_) {}
+      });
+    }
+
+    function setupHostIncoming(conn) {
+      conn.on("open", () => {
+        conn.on("data", (msg) => handleClientMessage(conn, msg));
+        conn.on("close", () => removeConn(conn));
+        conn.on("error", () => removeConn(conn));
+      });
+    }
+
+    function removeConn(conn) {
+      let removedPid = null;
+      for (const [pid, c] of app.conns.entries()) {
+        if (c === conn) {
+          removedPid = pid;
+          app.conns.delete(pid);
+        }
+      }
+      if (app.isHost && app.state) {
+        for (const [pid, p] of Object.entries(app.state.players)) {
+          if (p.peerId === conn.peer) {
+            p.online = false;
+            removedPid = removedPid || pid;
+          }
+        }
+        if (app.state.status === "playing" && removedPid && !app.state.guesses[removedPid]) {
+          recordGuessOnHost(removedPid, { lat: null, lng: null, auto: true }, { broadcast: false });
+        }
+        broadcastState();
+      }
+    }
+
+    function send(conn, msg) {
+      if (conn && conn.open) conn.send(msg);
+    }
+
+    function broadcast(msg) {
+      for (const conn of app.conns.values()) send(conn, msg);
+    }
+
+    function broadcastState() {
+      if (!app.isHost || !app.state) return;
+      renderFromState();
+      broadcast({ type: "state", state: app.state });
+    }
+
+    function handleClientMessage(conn, msg) {
+      if (!msg || typeof msg !== "object" || !app.state) return;
+
+      if (msg.type === "join") {
+        const pid = msg.playerId;
+        app.conns.set(pid, conn);
+        app.state.players[pid] = {
+          id: pid,
+          peerId: conn.peer,
+          name: safeName(msg.name),
+          score: app.state.players[pid]?.score || 0,
+          online: true,
+          host: false
+        };
+        broadcastState();
+        return;
+      }
+
+      if (app.state.status !== "playing") return;
+      if (msg.round && msg.round !== app.state.currentRound) return;
+      if (!app.state.players[msg.playerId]) return;
+
+      if (msg.type === "provisional_guess") {
+        if (!app.state.guesses[msg.playerId]) {
+          app.state.provisionalGuesses = app.state.provisionalGuesses || {};
+          app.state.provisionalGuesses[msg.playerId] = sanitizeGuess(msg.guess);
+          broadcastState();
+        }
+        return;
+      }
+
+      if (msg.type === "guess") {
+        recordGuessOnHost(msg.playerId, sanitizeGuess(msg.guess), { broadcast: true });
+        return;
+      }
+
+      if (msg.type === "moment") {
+        addMomentOnHost(msg.playerId, msg.moment);
+      }
+    }
+
+    function sanitizeGuess(guess) {
+      if (!guess || guess.lat === null || guess.lng === null || !Number.isFinite(Number(guess.lat)) || !Number.isFinite(Number(guess.lng))) {
+        return { lat: null, lng: null, cheat: Boolean(guess?.cheat), auto: Boolean(guess?.auto) };
+      }
+      const lat = Math.max(-85, Math.min(85, Number(guess.lat)));
+      let lng = Number(guess.lng);
+      while (lng < -180) lng += 360;
+      while (lng > 180) lng -= 360;
+      return { lat, lng, cheat: Boolean(guess.cheat), auto: Boolean(guess.auto) };
+    }
+
+    function recordGuessOnHost(playerId, guess, opts = {}) {
+      if (!app.isHost || !app.state || app.state.status !== "playing") return;
+      if (!app.state.players[playerId]) return;
+      if (app.state.guesses[playerId]) return;
+      app.state.guesses[playerId] = sanitizeGuess(guess);
+      const total = Object.keys(app.state.players).length;
+      const guessed = Object.keys(app.state.guesses).length;
+      if (guessed >= total) endRound();
+      else if (opts.broadcast !== false) broadcastState();
+    }
+
+    function connectToHost(code) {
+      const targetId = peerIdFromCode(code);
+      if (app.hostConn) { try { app.hostConn.close(); } catch (_) {} }
+      app.hostConn = app.peer.connect(targetId, { reliable: true });
+      let opened = false;
+      const failTimer = setTimeout(() => {
+        if (!opened) toast("Nem találom a hostot. A hostnál legyen nyitva a szoba, és pontos legyen a kód.");
+      }, 4500);
+
+      app.hostConn.on("open", () => {
+        opened = true;
+        clearTimeout(failTimer);
+        send(app.hostConn, { type: "join", playerId: app.playerId, name: app.playerName });
+        toast("Csatlakozva a szobához.");
+      });
+      app.hostConn.on("data", (msg) => {
+        if (msg?.type === "state") {
+          app.state = msg.state;
+          app.roomCode = app.state.roomCode;
+          app.isHost = false;
+          renderFromState();
+        }
+      });
+      app.hostConn.on("close", () => {
+        clearTimeout(failTimer);
+        if (app.state?.status === "playing") toast("Kapcsolat megszakadt. A host időzítője ettől még lezárja a kört.");
+        else toast("A kapcsolat megszakadt a hosttal.");
+      });
+      app.hostConn.on("error", () => {
+        clearTimeout(failTimer);
+        toast("Nem sikerült csatlakozni. A host nyissa meg újra a szobát, vagy ellenőrizd a kódot.");
+      });
+    }
+
+    function createInitialState(code) {
+      const rounds = Number($("setting-rounds").value || 5);
+      const timePerRound = Number($("setting-time").value || 60);
+      const move = $("setting-move").value === "1";
+      const antiCheat = $("setting-anticheat").value === "1";
+      app.settings = { rounds, timePerRound, move, antiCheat };
+      return {
+        roomCode: code,
+        hostId: app.playerId,
+        status: "lobby",
+        currentRound: 1,
+        settings: { rounds, timePerRound, move, antiCheat },
+        roundStartTime: null,
+        locations: shuffle(LOCATIONS).slice(0, rounds),
+        players: {
+          [app.playerId]: { id: app.playerId, peerId: app.myPeerId, name: app.playerName, score: 0, online: true, host: true }
+        },
+        guesses: {},
+        provisionalGuesses: {},
+        moments: {},
+        lastRound: null
+      };
+    }
+
+    function renderFromState() {
+      if (!app.state) return;
+      if (app.state.status === "lobby") {
+        renderLobby();
+        showScreen("screen-lobby");
+      } else if (app.state.status === "playing") {
+        renderPlaying();
+        showScreen("screen-game");
+      } else if (app.state.status === "round_end") {
+        renderRoundResult();
+        showScreen("screen-round-result");
+      } else if (app.state.status === "finished") {
+        renderFinalResult();
+        showScreen("screen-final-result");
+      }
+    }
+
+    function renderLobby() {
+      const st = app.state;
+      $("lobby-room-code").textContent = st.roomCode;
+      $("player-count").textContent = Object.keys(st.players).length;
+      $("host-badge").textContent = app.isHost ? "HOST" : "VENDÉG";
+      $("btn-start-game").style.display = app.isHost ? "flex" : "none";
+      $("setting-rounds").disabled = !app.isHost;
+      $("setting-time").disabled = !app.isHost;
+      $("setting-move").disabled = !app.isHost;
+      $("setting-anticheat").disabled = !app.isHost;
+      $("setting-rounds").value = st.settings.rounds;
+      $("setting-time").value = st.settings.timePerRound;
+      $("setting-move").value = st.settings.move ? "1" : "0";
+      $("setting-anticheat").value = st.settings.antiCheat === false ? "0" : "1";
+      updateSettingsLabels();
+
+      const list = $("lobby-players-list");
+      list.innerHTML = "";
+      Object.values(st.players).forEach(p => {
+        const li = document.createElement("li");
+        li.className = "flex items-center justify-between rounded-2xl border border-white/10 bg-slate-900/55 p-3";
+        li.innerHTML = `
+          <div class="flex items-center gap-3 min-w-0">
+            <div class="h-11 w-11 shrink-0 rounded-2xl ${p.id === app.playerId ? "bg-blue-600" : "bg-slate-700"} flex items-center justify-center font-black">${p.name.charAt(0).toUpperCase()}</div>
+            <div class="min-w-0"><div class="truncate text-lg font-black">${escapeHtml(p.name)}</div><div class="text-xs ${p.online ? "text-green-300" : "text-slate-500"}">${p.online ? "online" : "offline"}</div></div>
+          </div>
+          <div class="flex items-center gap-2">${p.host ? "<i class='ph-fill ph-crown text-2xl text-yellow-300'></i>" : ""}</div>`;
+        list.appendChild(li);
+      });
+    }
+
+    function updateSettingsLabels() {
+      $("setting-rounds-val").textContent = $("setting-rounds").value;
+      $("setting-time-val").textContent = $("setting-time").value + " mp";
+      $("setting-move-val").textContent = $("setting-move").value === "1" ? "Be" : "Ki";
+      $("setting-anticheat-val").textContent = $("setting-anticheat").value === "1" ? "Be" : "Ki";
+    }
+
+    function renderPlaying() {
+      const st = app.state;
+      const me = st.players[app.playerId];
+      const loc = st.locations[st.currentRound - 1];
+      if (!loc || !me) return;
+
+      $("hud-round").textContent = st.currentRound;
+      $("hud-round-total").textContent = "/" + st.settings.rounds;
+      $("hud-score").textContent = me.score.toLocaleString("hu-HU");
+
+      const alreadyGuessed = Boolean(st.guesses[app.playerId]);
+      if (!app._lastRoundKey || app._lastRoundKey !== `${st.roomCode}-${st.currentRound}`) {
+        app._lastRoundKey = `${st.roomCode}-${st.currentRound}`;
+        app.currentGuess = null;
+        app.hasSubmitted = false;
+        app.cheatLockedRound = null;
+        $("anti-cheat-overlay").classList.add("hidden");
+        $("anti-cheat-overlay").classList.remove("flex");
+        if (app.guessMarker) {
+          app.guessMap.removeLayer(app.guessMarker);
+          app.guessMarker = null;
+        }
+        $("btn-make-guess").disabled = true;
+        $("btn-make-guess").textContent = "Tegyél tippet a térképen";
+        $("waiting-for-others").classList.add("hidden");
+        loadStreetLocation(loc, st.settings.move);
+        updateCameraRoundUI();
+        if (app.guessMap) {
+          app.guessMap.setView([20, 0], 2);
+          refreshMapTiles(app.guessMap);
+        }
+      }
+
+      startTimer(st.roundStartTime, st.settings.timePerRound);
+      if (st.settings?.antiCheat === false) {
+        $("anti-cheat-overlay").classList.add("hidden");
+        $("anti-cheat-overlay").classList.remove("flex");
+      }
+      armAntiCheatPoller();
+
+      if (alreadyGuessed) {
+        app.hasSubmitted = true;
+        if (st.settings?.antiCheat !== false && st.guesses[app.playerId]?.cheat) {
+          app.cheatLockedRound = st.currentRound;
+          $("anti-cheat-overlay").classList.remove("hidden");
+          $("anti-cheat-overlay").classList.add("flex");
+          $("btn-make-guess").disabled = true;
+          $("btn-make-guess").textContent = "Letiltva erre a körre";
+        } else {
+          showWaiting();
+        }
+      }
+    }
+
+    function showWaiting() {
+      const total = Object.keys(app.state.players).length;
+      const guessed = Object.keys(app.state.guesses || {}).length;
+      $("waiting-for-others").classList.remove("hidden");
+      $("waiting-for-others").classList.add("flex");
+      $("guess-status-text").textContent = `${guessed} / ${total} tippelt`;
+    }
+
+    function startTimer(startMs, duration) {
+      clearInterval(app.timer);
+      const tick = () => {
+        if (!app.state || app.state.status !== "playing") return;
+        const remaining = Math.max(0, duration - ((Date.now() - startMs) / 1000));
+        $("hud-timer").textContent = Math.ceil(remaining);
+        const pct = Math.max(0, Math.min(100, remaining / duration * 100));
+        $("timer-progress").style.width = pct + "%";
+        $("timer-progress").style.background = remaining <= 10 ? "#ef4444" : remaining <= 25 ? "#f59e0b" : "#3b82f6";
+        if (remaining <= 0) {
+          clearInterval(app.timer);
+          if (!app.hasSubmitted && app.cheatLockedRound !== app.state?.currentRound) submitGuess(true);
+          if (app.isHost && app.state?.status === "playing") endRound();
+        }
+      };
+      tick();
+      app.timer = setInterval(tick, 250);
+
+      if (app.isHost && app.state?.status === "playing") {
+        const msLeft = Math.max(0, startMs + duration * 1000 - Date.now()) + 450;
+        clearTimeout(app.hostRoundCloser);
+        app.hostRoundCloser = setTimeout(() => {
+          if (app.isHost && app.state?.status === "playing") endRound();
+        }, msLeft);
+      }
+    }
+
+    function loadStreetLocation(loc, canMove) {
+      clearTimeout(app.svTimeout);
+      $("fallback-street-overlay").style.display = "none";
+      $("fallback-pano-map").classList.add("hidden");
+      $("pano").style.display = "block";
+
+      const fallback = () => {
+        $("pano").style.display = "none";
+        $("fallback-pano-map").classList.remove("hidden");
+        $("fallback-street-overlay").style.display = "block";
+        if (!app.fallbackMap) {
+          app.fallbackMap = L.map("fallback-pano-map", { zoomControl: false, attributionControl: false, dragging: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false, keyboard: false }).setView([loc.lat, loc.lng], 13);
+          L.tileLayer(TILE_NORMAL, { attribution: TILE_ATTR, maxZoom: 19, updateWhenIdle: false, keepBuffer: 8, crossOrigin: true }).addTo(app.fallbackMap);
+        } else {
+          app.fallbackMap.setView([loc.lat, loc.lng], 13);
+        }
+        setTimeout(() => app.fallbackMap.invalidateSize(), 100);
+      };
+
+      try {
+        if (!window.google || !google.maps || !google.maps.StreetViewPanorama) {
+          fallback();
+          return;
+        }
+        if (!app.streetView) {
+          app.streetView = new google.maps.StreetViewPanorama($("pano"), {
+            disableDefaultUI: true,
+            addressControl: false,
+            showRoadLabels: false,
+            linksControl: canMove,
+            clickToGo: canMove,
+            panControl: true,
+            zoomControl: true,
+            motionTracking: false,
+            motionTrackingControl: false,
+            pov: { heading: loc.heading || Math.random() * 360, pitch: 0 },
+            zoom: 1
+          });
+        }
+        app.streetView.setOptions({ linksControl: canMove, clickToGo: canMove, showRoadLabels: false });
+        app.streetView.setPosition({ lat: loc.lat, lng: loc.lng });
+        app.streetView.setPov({ heading: loc.heading || Math.random() * 360, pitch: 0 });
+        app.svTimeout = setTimeout(() => {
+          const visible = app.streetView && app.streetView.getVisible && app.streetView.getVisible();
+          const pano = app.streetView && app.streetView.getPano && app.streetView.getPano();
+          if (!visible || !pano) fallback();
+        }, 3500);
+      } catch (e) {
+        console.warn("Street View fallback", e);
+        fallback();
+      }
+    }
+
+    function initMaps() {
+      if (!window.L) {
+        toast("A Leaflet nem töltött be. Ellenőrizd az internetkapcsolatot.");
+        return;
+      }
+
+      const isCoarsePointer = window.matchMedia && window.matchMedia("(pointer: coarse)").matches;
+      app.guessMap = L.map("guess-map", {
+        zoomControl: false,
+        attributionControl: false,
+        worldCopyJump: true,
+        preferCanvas: true,
+        zoomAnimation: false,
+        fadeAnimation: false,
+        markerZoomAnimation: false,
+        inertia: true,
+        inertiaDeceleration: 2800,
+        tapTolerance: 18
+      }).setView([20, 0], 2);
+      L.tileLayer(TILE_NORMAL, {
+        attribution: TILE_ATTR,
+        minZoom: 1,
+        maxZoom: 18,
+        updateWhenIdle: isCoarsePointer,
+        updateWhenZooming: false,
+        keepBuffer: isCoarsePointer ? 6 : 10,
+        noWrap: false,
+        crossOrigin: true,
+        detectRetina: false
+      }).addTo(app.guessMap);
+      L.control.zoom({ position: "bottomleft" }).addTo(app.guessMap);
+
+      app.guessMap.on("click", (e) => {
+        if (app.hasSubmitted || app.cheatLockedRound === app.state?.currentRound || app.state?.status !== "playing") return;
+        const latlng = e.latlng.wrap ? e.latlng.wrap() : e.latlng;
+        app.currentGuess = { lat: latlng.lat, lng: latlng.lng };
+        if (!app.guessMarker) app.guessMarker = L.marker([latlng.lat, latlng.lng], { icon: makePin() }).addTo(app.guessMap);
+        else app.guessMarker.setLatLng([latlng.lat, latlng.lng]);
+        $("btn-make-guess").disabled = false;
+        $("btn-make-guess").textContent = "Tipp beküldése";
+        sendProvisionalGuess();
+      });
+
+      app.resultMap = L.map("result-map", { attributionControl: false, worldCopyJump: true, preferCanvas: true, zoomAnimation: false, fadeAnimation: false }).setView([20, 0], 2);
+      L.tileLayer(TILE_NORMAL, { attribution: TILE_ATTR, minZoom: 1, maxZoom: 18, updateWhenIdle: true, updateWhenZooming: false, keepBuffer: 6, crossOrigin: true, detectRetina: false }).addTo(app.resultMap);
+    }
+
+    function refreshMapTiles(map, forceRedraw = false) {
+      if (!map) return;
+      const run = () => {
+        try {
+          map.invalidateSize({ animate: false, pan: false });
+          if (forceRedraw) map.eachLayer(layer => { if (layer && typeof layer.redraw === "function") layer.redraw(); });
+        } catch (_) {}
+      };
+      run();
+      [120, 320].forEach(ms => setTimeout(run, ms));
+    }
+
+    function sendProvisionalGuess() {
+      if (!app.state || app.state.status !== "playing" || !app.currentGuess) return;
+      const guess = sanitizeGuess({ ...app.currentGuess });
+      if (app.isHost) {
+        app.state.provisionalGuesses = app.state.provisionalGuesses || {};
+        app.state.provisionalGuesses[app.playerId] = guess;
+      } else {
+        send(app.hostConn, { type: "provisional_guess", playerId: app.playerId, round: app.state.currentRound, guess });
+      }
+    }
+
+    function antiCheatSignal(reason = "focus") {
+      if (!app.state || app.state.status !== "playing") return;
+      if (app.state.settings?.antiCheat === false) return;
+      const now = Date.now();
+      if (now - app.lastCheatSignalAt < 300) return;
+      app.lastCheatSignalAt = now;
+      forfeitForCheat(reason);
+    }
+
+    function forfeitForCheat(reason = "focus") {
+      if (!app.state || app.state.status !== "playing") return;
+      if (app.cheatLockedRound === app.state.currentRound) {
+        $("anti-cheat-overlay").classList.remove("hidden");
+        $("anti-cheat-overlay").classList.add("flex");
+        return;
+      }
+
+      const round = app.state.currentRound;
+      app.cheatLockedRound = round;
+      app.hasSubmitted = true;
+      app.currentGuess = null;
+      if (app.guessMarker && app.guessMap) {
+        app.guessMap.removeLayer(app.guessMarker);
+        app.guessMarker = null;
+      }
+      $("btn-make-guess").disabled = true;
+      $("btn-make-guess").textContent = "Letiltva erre a körre";
+      $("waiting-for-others").classList.add("hidden");
+      $("waiting-for-others").classList.remove("flex");
+      $("anti-cheat-overlay").classList.remove("hidden");
+      $("anti-cheat-overlay").classList.add("flex");
+
+      const guess = { lat: null, lng: null, cheat: true, reason };
+      if (app.isHost) {
+        recordGuessOnHost(app.playerId, guess, { broadcast: true });
+      } else {
+        send(app.hostConn, { type: "guess", playerId: app.playerId, round, guess });
+      }
+    }
+
+    function submitGuess(auto = false) {
+      if (!app.state || app.state.status !== "playing" || app.hasSubmitted || app.cheatLockedRound === app.state.currentRound) return;
+      app.hasSubmitted = true;
+      const guess = app.currentGuess ? sanitizeGuess({ ...app.currentGuess, auto }) : { lat: null, lng: null, auto };
+      $("btn-make-guess").disabled = true;
+      $("btn-make-guess").textContent = auto ? "Idő lejárt" : "Elküldve";
+
+      if (app.isHost) {
+        recordGuessOnHost(app.playerId, guess, { broadcast: true });
+      } else {
+        send(app.hostConn, { type: "guess", playerId: app.playerId, round: app.state.currentRound, guess });
+      }
+      showWaiting();
+    }
+
+    function endRound() {
+      if (!app.isHost || !app.state || app.state.status !== "playing") return;
+      clearTimeout(app.hostRoundCloser);
+      const loc = app.state.locations[app.state.currentRound - 1];
+      const results = {};
+      app.state.provisionalGuesses = app.state.provisionalGuesses || {};
+      app.state.guesses = app.state.guesses || {};
+
+      for (const pid of Object.keys(app.state.players)) {
+        const submitted = app.state.guesses[pid];
+        const provisional = app.state.provisionalGuesses[pid];
+        const guess = sanitizeGuess(submitted || provisional || { lat: null, lng: null, auto: true });
+        app.state.guesses[pid] = guess;
+        const km = guess.lat === null ? Infinity : distanceKm(loc.lat, loc.lng, guess.lat, guess.lng);
+        const points = scoreFromDistance(km);
+        app.state.players[pid].score += points;
+        results[pid] = { guess, distanceKm: km, points, submitted: Boolean(submitted), cheat: Boolean(guess.cheat), auto: Boolean(guess.auto || (!submitted && Boolean(provisional))) };
+      }
+
+      app.state.lastRound = { round: app.state.currentRound, location: loc, results };
+      app.state.status = "round_end";
+      broadcastState();
+    }
+
+    function renderRoundResult() {
+      clearInterval(app.timer);
+      const st = app.state;
+      const lr = st.lastRound;
+      if (!lr) return;
+      const loc = lr.location;
+      $("correct-location-name").textContent = loc.name;
+
+      if (!app.resultMap) return;
+      app.resultLayers.forEach(layer => app.resultMap.removeLayer(layer));
+      app.resultLayers = [];
+      setTimeout(() => app.resultMap.invalidateSize(), 100);
+
+      const allLatLng = [[loc.lat, loc.lng]];
+      const realMarker = L.marker([loc.lat, loc.lng], { icon: makePin("real") }).addTo(app.resultMap).bindTooltip("Helyes válasz", { permanent: false });
+      app.resultLayers.push(realMarker);
+
+      Object.entries(lr.results).forEach(([pid, r]) => {
+        if (r.guess && r.guess.lat !== null) {
+          const type = pid === app.playerId ? "me" : "other";
+          const p = st.players[pid];
+          const m = L.marker([r.guess.lat, r.guess.lng], { icon: makePin(type) }).addTo(app.resultMap).bindTooltip(p?.name || "Játékos");
+          const line = L.polyline([[r.guess.lat, r.guess.lng], [loc.lat, loc.lng]], { color: pid === app.playerId ? "#3b82f6" : "#a855f7", weight: 3, opacity: .8, dashArray: "7 10" }).addTo(app.resultMap);
+          app.resultLayers.push(m, line);
+          allLatLng.push([r.guess.lat, r.guess.lng]);
+        }
+      });
+
+      if (allLatLng.length > 1) app.resultMap.fitBounds(L.latLngBounds(allLatLng), { padding: [70, 70], maxZoom: 7 });
+      else app.resultMap.setView([loc.lat, loc.lng], 5);
+      refreshMapTiles(app.resultMap);
+
+      const myR = lr.results[app.playerId] || { distanceKm: Infinity, points: 0 };
+      $("round-distance").textContent = formatDistance(myR.distanceKm);
+      $("round-points").textContent = "+" + myR.points.toLocaleString("hu-HU");
+      $("round-accuracy").textContent = myR.points ? Math.round(myR.points / 5000 * 100) + "%" : "0%";
+
+      const rows = Object.values(st.players).map(p => ({ ...p, round: lr.results[p.id] || { distanceKm: Infinity, points: 0 } }))
+        .sort((a,b) => b.round.points - a.round.points || b.score - a.score);
+      const list = $("round-leaderboard");
+      list.innerHTML = "";
+      rows.forEach((p, i) => {
+        const li = document.createElement("li");
+        li.className = `rounded-2xl border p-3 ${p.id === app.playerId ? "border-blue-400 bg-blue-950/50" : "border-white/10 bg-slate-900/45"}`;
+        li.innerHTML = `<div class="flex items-center justify-between gap-3">
+          <div class="min-w-0"><div class="font-black truncate"><span class="text-slate-500 mr-2">${i+1}.</span>${escapeHtml(p.name)}</div><div class="text-xs text-slate-400">${p.round.cheat ? "Anti-cheat: nincs tipp" : formatDistance(p.round.distanceKm)}${(!p.round.submitted && Number.isFinite(p.round.distanceKm)) ? " · automatikus" : ""}</div></div>
+          <div class="text-right"><div class="font-black text-green-300">+${p.round.points.toLocaleString("hu-HU")}</div><div class="text-xs font-bold text-yellow-300">${p.score.toLocaleString("hu-HU")} pt</div></div>
+        </div>`;
+        list.appendChild(li);
+      });
+
+      renderMomentsForRound(st.currentRound);
+      $("btn-next-round").style.display = app.isHost ? "block" : "none";
+      $("btn-next-round").textContent = st.currentRound >= st.settings.rounds ? "Végeredmény" : "Következő kör";
+    }
+
+    function nextRound() {
+      clearTimeout(app.hostRoundCloser);
+      if (!app.isHost || !app.state) return;
+      if (app.state.currentRound >= app.state.settings.rounds) {
+        app.state.status = "finished";
+      } else {
+        app.state.currentRound += 1;
+        app.state.guesses = {};
+        app.state.provisionalGuesses = {};
+        app.state.lastRound = null;
+        app.state.roundStartTime = Date.now() + 900;
+        app.state.status = "playing";
+      }
+      app._lastRoundKey = null;
+      broadcastState();
+    }
+
+    function renderFinalResult() {
+      clearInterval(app.timer);
+      const players = Object.values(app.state.players).sort((a,b) => b.score - a.score);
+      const podium = $("podium-container");
+      podium.innerHTML = "";
+      const podiumCell = (p, place, height, color) => {
+        if (!p) return `<div class="w-1/3"></div>`;
+        return `<div class="flex h-full w-1/3 flex-col items-center justify-end">
+          <div class="mb-2 max-w-full rounded-2xl bg-slate-950/60 px-3 py-2"><div class="truncate font-black">${escapeHtml(p.name)}</div><div class="text-yellow-300 font-black">${p.score.toLocaleString("hu-HU")}</div></div>
+          <div class="w-full rounded-t-3xl ${color} ${height} flex items-start justify-center pt-4 text-5xl font-black text-white/55 shadow-2xl">${place}</div>
+        </div>`;
+      };
+      podium.innerHTML = podiumCell(players[1], 2, "h-28", "bg-slate-500") + podiumCell(players[0], 1, "h-44", "bg-yellow-500") + podiumCell(players[2], 3, "h-20", "bg-orange-700");
+
+      const list = $("final-leaderboard");
+      list.innerHTML = "";
+      players.forEach((p, i) => {
+        const li = document.createElement("li");
+        li.className = `flex items-center justify-between rounded-2xl border p-4 ${p.id === app.playerId ? "border-blue-400 bg-blue-950/40" : "border-white/10 bg-slate-900/45"}`;
+        li.innerHTML = `<div class="font-black text-lg"><span class="text-slate-500 mr-3">${i+1}.</span>${escapeHtml(p.name)}</div><div class="font-black text-yellow-300">${p.score.toLocaleString("hu-HU")} pt</div>`;
+        list.appendChild(li);
+      });
+    }
+
+    function startGame() {
+      clearTimeout(app.hostRoundCloser);
+      if (!app.isHost || !app.state) return;
+      syncSettingsToState();
+      app.state.locations = shuffle(LOCATIONS).slice(0, app.state.settings.rounds);
+      for (const p of Object.values(app.state.players)) p.score = 0;
+      app.state.currentRound = 1;
+      app.state.guesses = {};
+      app.state.provisionalGuesses = {};
+      app.state.moments = {};
+      app.state.lastRound = null;
+      app.state.roundStartTime = Date.now() + 1000;
+      app.state.status = "playing";
+      app._lastRoundKey = null;
+      broadcastState();
+    }
+
+    function syncSettingsToState() {
+      if (!app.isHost || !app.state || app.state.status !== "lobby") return;
+      app.state.settings = {
+        rounds: Number($("setting-rounds").value),
+        timePerRound: Number($("setting-time").value),
+        move: $("setting-move").value === "1",
+        antiCheat: $("setting-anticheat").value === "1"
+      };
+      broadcastState();
+    }
+
+    function leaveRoom() {
+      clearInterval(app.timer);
+      clearTimeout(app.hostRoundCloser);
+      stopCameraMoments(true);
+      app.isHost = false;
+      app.roomCode = null;
+      app.state = null;
+      app.conns.forEach(c => { try { c.close(); } catch (_) {} });
+      app.conns.clear();
+      if (app.hostConn) { try { app.hostConn.close(); } catch (_) {} }
+      app.hostConn = null;
+      app._lastRoundKey = null;
+      initPeer();
+      showScreen("screen-menu");
+    }
+
+    function escapeHtml(str) {
+      return String(str).replace(/[&<>'"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[ch]));
+    }
+
+
+
+    function getCameraEnvironmentHelp() {
+      const proto = location.protocol;
+      const host = location.hostname || "";
+      const isLocalhost = ["localhost", "127.0.0.1", "::1"].includes(host);
+      const isFile = proto === "file:";
+      const secure = window.isSecureContext || isLocalhost;
+      const ua = navigator.userAgent || "";
+      const isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+      const isBraveMaybe = !!navigator.brave;
+      let lines = [];
+      if (isFile) lines.push("file:// módból sok mobil böngésző nem kér kamerát. Tedd fel HTTPS-re, vagy futtasd localhostként azon az eszközön.");
+      if (!secure) lines.push("Ez az oldal nem biztonságos eredetű. Telefonon a kamera általában csak HTTPS-en működik. A sima http://192.168.x.x LAN cím nem számít localhostnak.");
+      if (isIOS) lines.push("iPhone-on a legstabilabb Safari alatt, HTTPS oldalról. Ha korábban tiltottad: Beállítások → Safari → Kamera, vagy a címsor/AA menü webhelybeállításai.");
+      if (isBraveMaybe) lines.push("Brave alatt kapcsold ki erre az oldalra a Shieldet, majd frissítsd az oldalt, és próbáld újra.");
+      lines.push("Android Chrome/Brave: címsor melletti lakat/ikon → Engedélyek → Kamera → Engedélyezés. Ha blokkolva van, a böngésző nem mindig dob fel új kérdést.");
+      return lines.join(" ");
+    }
+
+    function updateCameraButtons(message, tone = "slate") {
+      const cls = tone === "green" ? "text-green-300" : tone === "yellow" ? "text-yellow-300" : tone === "red" ? "text-red-300" : "text-slate-400";
+      const enabled = Boolean(app.cameraEnabled);
+      if ($("btn-camera-toggle")) $("btn-camera-toggle").textContent = enabled ? "Kamera ki" : "Kamera engedély";
+      if ($("btn-menu-camera")) $("btn-menu-camera").textContent = enabled ? "Kamera kikapcsolása" : "Kamera engedélyezése";
+      if ($("btn-capture-moment")) $("btn-capture-moment").disabled = !enabled;
+      const mode = app.faceDetectionEnabled ? "arcdetektálás" : "mozgás";
+      if ($("camera-status")) {
+        $("camera-status").textContent = message || (enabled ? `Bekapcsolva · ${mode}` : "Kamera opcionális");
+        $("camera-status").className = "mt-1 text-xs font-bold " + cls;
+      }
+      if ($("menu-camera-status")) {
+        $("menu-camera-status").textContent = message || (enabled ? `Bekapcsolva · ${mode}` : "Opcionális · nincs bekapcsolva");
+        $("menu-camera-status").className = "mt-1 text-xs font-bold " + cls;
+      }
+    }
+
+    function showCameraConsent() {
+      const modal = $("camera-consent-modal");
+      const help = $("camera-consent-help");
+      if (!modal) return startCameraMoments();
+      const helpText = getCameraEnvironmentHelp();
+      if (help) {
+        help.textContent = helpText;
+        help.classList.toggle("hidden", !helpText);
+      }
+      modal.classList.add("show");
+    }
+
+    function hideCameraConsent() {
+      $("camera-consent-modal")?.classList.remove("show");
+    }
+
+    async function toggleCameraMoments() {
+      if (app.cameraEnabled) {
+        stopCameraMoments(false);
+        return;
+      }
+      showCameraConsent();
+    }
+
+    async function startCameraMoments() {
+      hideCameraConsent();
+      const isLocalhost = ["localhost", "127.0.0.1", "::1"].includes(location.hostname);
+      const isFile = location.protocol === "file:";
+      if ((!window.isSecureContext && !isLocalhost) || isFile) {
+        updateCameraButtons("Kamera csak HTTPS-en/localhoston kérhető", "yellow");
+        toast("Mobilon a kamera nem kérhető sima LAN HTTP vagy file:// oldalról. Tedd HTTPS-re, vagy engedélyezd a böngészőben a webhely kameráját.");
+        return;
+      }
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        updateCameraButtons("Ez a böngésző nem ad kamera API-t", "yellow");
+        toast("A böngésző nem támogatja a kamera-hozzáférést ezen az oldalon.");
+        return;
+      }
+
+      try {
+        updateCameraButtons("Engedélykérés...", "yellow");
+        const stream = await requestBestCameraStream();
+        app.cameraStream = stream;
+        app.cameraEnabled = true;
+        const video = $("moments-video");
+        video.setAttribute("playsinline", "");
+        video.setAttribute("webkit-playsinline", "");
+        video.muted = true;
+        video.autoplay = true;
+        video.srcObject = stream;
+        video.classList.remove("hidden");
+        await new Promise(resolve => {
+          const done = () => resolve();
+          video.onloadedmetadata = done;
+          setTimeout(done, 900);
+        });
+        try { await video.play(); } catch (_) {}
+        setupFaceDetection();
+        updateCameraButtons(app.faceDetectionEnabled ? "Bekapcsolva · arcdetektálás" : "Bekapcsolva · mozgás-alap", "green");
+        startMomentLoop();
+      } catch (e) {
+        console.warn("Camera denied/unavailable", e);
+        app.cameraEnabled = false;
+        let msg = "Nincs kameraengedély · játék megy tovább";
+        if (e && (e.name === "NotAllowedError" || e.name === "SecurityError")) msg = "Kamera tiltva · engedélyezd a webhelynek";
+        if (e && e.name === "NotFoundError") msg = "Nincs elérhető kamera · játék megy tovább";
+        if (e && (e.name === "NotReadableError" || e.name === "AbortError")) msg = "A kamerát más app használja";
+        if (e && (e.name === "OverconstrainedError" || e.name === "ConstraintNotSatisfiedError")) msg = "Kamera beállítás nem támogatott";
+        updateCameraButtons(msg, "yellow");
+        toast(msg + ". " + getCameraEnvironmentHelp());
+      }
+    }
+
+    async function requestBestCameraStream() {
+      const tries = [
+        { video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 24, max: 30 } }, audio: false },
+        { video: { facingMode: { ideal: "user" } }, audio: false },
+        { video: true, audio: false }
+      ];
+      let lastErr = null;
+      for (const constraints of tries) {
+        try { return await navigator.mediaDevices.getUserMedia(constraints); }
+        catch (e) { lastErr = e; }
+      }
+      throw lastErr || new Error("Camera unavailable");
+    }
+
+    function setupFaceDetection() {
+      app.faceDetector = null;
+      app.faceDetectionEnabled = false;
+      app.lastFaceMetric = null;
+      try {
+        if ("FaceDetector" in window) {
+          app.faceDetector = new FaceDetector({ fastMode: true, maxDetectedFaces: 1 });
+          app.faceDetectionEnabled = true;
+        }
+      } catch (_) {
+        app.faceDetector = null;
+        app.faceDetectionEnabled = false;
+      }
+    }
+
+    function stopCameraMoments(clearAll = false) {
+      clearInterval(app.cameraLoop);
+      app.cameraLoop = null;
+      app.lastMotionFrame = null;
+      app.lastFaceMetric = null;
+      app.faceDetector = null;
+      app.faceDetectionEnabled = false;
+      if (app.cameraStream) {
+        app.cameraStream.getTracks().forEach(t => t.stop());
+      }
+      app.cameraStream = null;
+      app.cameraEnabled = false;
+      const video = $("moments-video");
+      if (video) {
+        video.pause?.();
+        video.srcObject = null;
+        video.classList.add("hidden");
+      }
+      updateCameraButtons(clearAll ? "Moments törölve" : "Kamera kikapcsolva", "slate");
+      if (clearAll && app.state) app.state.moments = {};
+    }
+
+    function updateCameraRoundUI() {
+      if (!$("camera-status")) return;
+      if (app.cameraEnabled) {
+        updateCameraButtons("Bekapcsolva · kör " + (app.state?.currentRound || "-"), "green");
+      } else {
+        updateCameraButtons("Kamera opcionális", "slate");
+      }
+    }
+
+    function startMomentLoop() {
+      clearInterval(app.cameraLoop);
+      app.cameraLoop = setInterval(async () => {
+        if (!app.cameraEnabled || !app.state || app.state.status !== "playing") return;
+        if (app.cheatLockedRound === app.state.currentRound) return;
+        const score = await getReactionScore();
+        if (score > 18) captureMoment(app.faceDetectionEnabled ? "arc-reakció" : "reakció");
+      }, 650);
+    }
+
+    async function getReactionScore() {
+      if (app.faceDetector) {
+        const faceScore = await getFaceReactionScore();
+        if (faceScore !== null) return faceScore;
+      }
+      return getMotionScore();
+    }
+
+    async function getFaceReactionScore() {
+      const video = $("moments-video");
+      if (!video || video.readyState < 2 || !video.videoWidth) return null;
+      try {
+        const faces = await app.faceDetector.detect(video);
+        if (!faces || !faces.length) {
+          app.lastFaceMetric = null;
+          return 0;
+        }
+        const b = faces[0].boundingBox;
+        const metric = {
+          x: b.x / video.videoWidth,
+          y: b.y / video.videoHeight,
+          w: b.width / video.videoWidth,
+          h: b.height / video.videoHeight,
+          motion: getMotionScore()
+        };
+        if (!app.lastFaceMetric) {
+          app.lastFaceMetric = metric;
+          return 0;
+        }
+        const prev = app.lastFaceMetric;
+        app.lastFaceMetric = metric;
+        const faceShift = Math.abs(metric.x - prev.x) * 90 + Math.abs(metric.y - prev.y) * 90 + Math.abs(metric.w - prev.w) * 120 + Math.abs(metric.h - prev.h) * 120;
+        return metric.motion * 0.75 + faceShift;
+      } catch (_) {
+        app.faceDetector = null;
+        app.faceDetectionEnabled = false;
+        updateCameraButtons("Bekapcsolva · mozgás-alap", "green");
+        return null;
+      }
+    }
+
+    function getMotionScore() {
+      const video = $("moments-video");
+      if (!video || video.readyState < 2 || !video.videoWidth) return 0;
+      if (!app.motionCanvas) app.motionCanvas = document.createElement("canvas");
+      const w = 48, h = 36;
+      app.motionCanvas.width = w;
+      app.motionCanvas.height = h;
+      const ctx = app.motionCanvas.getContext("2d", { willReadFrequently: true });
+      ctx.drawImage(video, 0, 0, w, h);
+      const data = ctx.getImageData(0, 0, w, h).data;
+      const frame = new Uint8Array(w * h);
+      for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+        frame[j] = (data[i] * .299 + data[i+1] * .587 + data[i+2] * .114) | 0;
+      }
+      if (!app.lastMotionFrame) {
+        app.lastMotionFrame = frame;
+        return 0;
+      }
+      let diff = 0;
+      for (let i = 0; i < frame.length; i++) diff += Math.abs(frame[i] - app.lastMotionFrame[i]);
+      app.lastMotionFrame = frame;
+      return diff / frame.length;
+    }
+
+    function captureMoment(kind = "kézi") {
+      if (!app.cameraEnabled || !app.state || app.state.status !== "playing") return;
+      const now = Date.now();
+      if (now - app.lastMomentAt < 3500 && kind !== "kézi") return;
+      app.lastMomentAt = now;
+      const video = $("moments-video");
+      if (!video || video.readyState < 2 || !video.videoWidth) return;
+      if (!app.momentCanvas) app.momentCanvas = document.createElement("canvas");
+      const w = 240, h = 180;
+      app.momentCanvas.width = w;
+      app.momentCanvas.height = h;
+      const ctx = app.momentCanvas.getContext("2d");
+      ctx.save();
+      ctx.scale(-1, 1);
+      ctx.drawImage(video, -w, 0, w, h);
+      ctx.restore();
+      const src = app.momentCanvas.toDataURL("image/jpeg", 0.72);
+      const moment = {
+        id: (crypto.randomUUID ? crypto.randomUUID() : String(now) + Math.random()),
+        playerId: app.playerId,
+        playerName: app.playerName,
+        round: app.state.currentRound,
+        kind,
+        at: now,
+        src
+      };
+      if (app.isHost) addMomentOnHost(app.playerId, moment);
+      else send(app.hostConn, { type: "moment", playerId: app.playerId, round: app.state.currentRound, moment });
+      if (kind === "kézi") toast("Moment rögzítve erre a körre.");
+    }
+
+    function addMomentOnHost(playerId, rawMoment) {
+      if (!app.isHost || !app.state || !rawMoment) return;
+      const round = Number(rawMoment.round || app.state.currentRound);
+      if (app.state.status !== "playing" || round !== app.state.currentRound) return;
+      if (!app.state.players[playerId]) return;
+      if (typeof rawMoment.src !== "string" || !rawMoment.src.startsWith("data:image/jpeg;base64,")) return;
+      app.state.moments = app.state.moments || {};
+      const key = String(round);
+      app.state.moments[key] = app.state.moments[key] || [];
+      if (app.state.moments[key].length >= 24) return;
+      app.state.moments[key].push({
+        id: String(rawMoment.id || Date.now()),
+        playerId,
+        playerName: app.state.players[playerId].name,
+        round,
+        kind: ["kézi", "reakció", "mozgás", "arc-reakció"].includes(rawMoment.kind) ? rawMoment.kind : "reakció",
+        number: 1 + (app.state.moments[key] || []).filter(x => x.playerId === playerId).length,
+        at: Number(rawMoment.at || Date.now()),
+        src: rawMoment.src
+      });
+      broadcastState();
+    }
+
+    function formatMomentTitle(m, idx) {
+      const t = new Date(m.at || Date.now()).toLocaleTimeString("hu-HU", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      const label = `${m.playerName || "Játékos"} #${m.number || (idx + 1)}`;
+      return `${label} · ${m.kind || "moment"} · ${t}`;
+    }
+
+    function renderMomentsForRound(round) {
+      const grid = $("moments-grid");
+      const count = $("moments-count");
+      if (!grid || !count) return;
+      const moments = (app.state?.moments?.[String(round)] || []).slice(-36);
+      count.textContent = String(moments.length);
+      app.momentViewerItems = moments;
+      grid.innerHTML = "";
+      if (!moments.length) {
+        grid.innerHTML = `<div class="col-span-full rounded-2xl border border-white/10 bg-slate-950/35 p-3 text-xs font-bold text-slate-400">Ebben a körben nincs moments kép. Akinek nincs kameraengedélye, arról nem készül kép.</div>`;
+        return;
+      }
+      moments.forEach((m, idx) => {
+        const card = document.createElement("button");
+        card.type = "button";
+        card.className = "moment-card text-left";
+        const title = formatMomentTitle(m, idx);
+        const label = `${m.playerName || "Játékos"} #${m.number || (idx + 1)}`;
+        card.title = title;
+        card.innerHTML = `<img alt="${escapeHtml(label)}" src="${m.src}"><div class="caption">${escapeHtml(label)}</div>`;
+        card.addEventListener("click", () => openMomentModal(idx));
+        grid.appendChild(card);
+      });
+    }
+
+    function showMomentAt(index) {
+      const items = app.momentViewerItems || [];
+      if (!items.length) return closeMomentModal();
+      app.momentViewerIndex = (index + items.length) % items.length;
+      const m = items[app.momentViewerIndex];
+      $("moment-modal-img").src = m.src;
+      $("moment-modal-title").textContent = `${formatMomentTitle(m, app.momentViewerIndex)} · ${app.momentViewerIndex + 1}/${items.length}`;
+      const multi = items.length > 1;
+      $("moment-modal-prev").style.display = multi ? "grid" : "none";
+      $("moment-modal-next").style.display = multi ? "grid" : "none";
+    }
+
+    function openMomentModal(index = 0) {
+      if (!app.momentViewerItems || !app.momentViewerItems.length) return;
+      $("moment-modal").classList.add("show");
+      showMomentAt(index);
+    }
+
+    function closeMomentModal() {
+      $("moment-modal").classList.remove("show");
+      $("moment-modal-img").removeAttribute("src");
+    }
+
+    function nextMoment(delta) {
+      if (!$("moment-modal").classList.contains("show")) return;
+      showMomentAt(app.momentViewerIndex + delta);
+    }
+
+    function armAntiCheatPoller() {
+      clearInterval(app.antiCheatPoller);
+      if (app.state?.settings?.antiCheat === false) {
+        $("anti-cheat-overlay").classList.add("hidden");
+        $("anti-cheat-overlay").classList.remove("flex");
+        return;
+      }
+      app.antiCheatPoller = setInterval(() => {
+        if (!app.state || app.state.status !== "playing") return;
+        if (app.cheatLockedRound === app.state.currentRound) return;
+        if (document.visibilityState === "hidden" || document.hidden) antiCheatSignal("poll-hidden");
+        else if (typeof document.hasFocus === "function" && !document.hasFocus()) antiCheatSignal("poll-focus");
+      }, 350);
+    }
+
+    function wireEvents() {
+      $("btn-save-profile").addEventListener("click", () => {
+        app.playerName = safeName($("player-name-input").value);
+        localStorage.setItem("geoPlayerName", app.playerName);
+        updateProfileUI();
+        showScreen("screen-menu");
+        if (!app.peer) initPeer();
+      });
+      $("player-name-input").addEventListener("keydown", e => { if (e.key === "Enter") $("btn-save-profile").click(); });
+      $("btn-change-name").addEventListener("click", () => showScreen("screen-profile"));
+      $("btn-show-join").addEventListener("click", () => $("join-box").classList.toggle("hidden"));
+
+      $("btn-create-room").addEventListener("click", () => {
+        const code = roomCode();
+        app.isHost = true;
+        app.roomCode = code;
+        initPeer(peerIdFromCode(code));
+        const wait = setInterval(() => {
+          if (app.myPeerId === peerIdFromCode(code)) {
+            clearInterval(wait);
+            app.state = createInitialState(code);
+            renderFromState();
+            toast("Szoba létrehozva. Küldd el a kódot: " + code);
+          }
+        }, 100);
+        setTimeout(() => clearInterval(wait), 7000);
+      });
+
+      $("btn-join-room").addEventListener("click", () => {
+        const code = $("room-code-input").value.trim().toUpperCase();
+        if (!code) return toast("Írd be a szobakódot.");
+        app.isHost = false;
+        app.roomCode = code;
+        if (!app.peer || app.peer.destroyed) initPeer();
+        const go = () => connectToHost(code);
+        if (app.myPeerId) go();
+        else {
+          const wait = setInterval(() => { if (app.myPeerId) { clearInterval(wait); go(); } }, 100);
+          setTimeout(() => clearInterval(wait), 7000);
+        }
+      });
+      $("room-code-input").addEventListener("keydown", e => { if (e.key === "Enter") $("btn-join-room").click(); });
+
+      $("room-code-card").addEventListener("click", async () => {
+        const code = $("lobby-room-code").textContent.trim();
+        try { await navigator.clipboard.writeText(code); toast("Szobakód másolva: " + code); }
+        catch (_) { toast("Szobakód: " + code); }
+      });
+
+      ["setting-rounds", "setting-time", "setting-move", "setting-anticheat"].forEach(id => {
+        $(id).addEventListener("input", () => { updateSettingsLabels(); syncSettingsToState(); });
+      });
+
+      $("btn-start-game").addEventListener("click", startGame);
+      $("btn-leave-room").addEventListener("click", leaveRoom);
+      $("btn-make-guess").addEventListener("click", () => submitGuess(false));
+      $("btn-toggle-map").addEventListener("click", () => { $("map-wrapper").classList.toggle("expanded"); refreshMapTiles(app.guessMap, true); });
+      $("map-wrapper").addEventListener("mouseenter", () => refreshMapTiles(app.guessMap));
+      $("map-wrapper").addEventListener("touchstart", () => refreshMapTiles(app.guessMap), { passive: true });
+      $("map-wrapper").addEventListener("transitionend", () => refreshMapTiles(app.guessMap, true));
+      $("btn-reset-guess-map").addEventListener("click", () => { if (app.guessMap) { app.guessMap.setView([20,0],2); refreshMapTiles(app.guessMap, true); } });
+      $("btn-next-round").addEventListener("click", nextRound);
+      $("btn-back-menu").addEventListener("click", leaveRoom);
+      $("btn-camera-toggle").addEventListener("click", toggleCameraMoments);
+      $("btn-menu-camera").addEventListener("click", toggleCameraMoments);
+      $("btn-capture-moment").addEventListener("click", () => captureMoment("kézi"));
+      $("moment-modal-close").addEventListener("click", closeMomentModal);
+      $("moment-modal-prev").addEventListener("click", (e) => { e.stopPropagation(); nextMoment(-1); });
+      $("moment-modal-next").addEventListener("click", (e) => { e.stopPropagation(); nextMoment(1); });
+      $("moment-modal").addEventListener("click", (e) => { if (e.target.id === "moment-modal") closeMomentModal(); });
+      $("camera-consent-close")?.addEventListener("click", hideCameraConsent);
+      $("camera-consent-cancel")?.addEventListener("click", hideCameraConsent);
+      $("camera-consent-allow")?.addEventListener("click", startCameraMoments);
+      $("camera-consent-modal")?.addEventListener("click", (e) => { if (e.target.id === "camera-consent-modal") hideCameraConsent(); });
+      let momentTouchX = null;
+      $("moment-modal").addEventListener("touchstart", (e) => { momentTouchX = e.touches?.[0]?.clientX ?? null; }, { passive: true });
+      $("moment-modal").addEventListener("touchend", (e) => {
+        if (momentTouchX === null) return;
+        const endX = e.changedTouches?.[0]?.clientX ?? momentTouchX;
+        const dx = endX - momentTouchX;
+        momentTouchX = null;
+        if (Math.abs(dx) > 45) nextMoment(dx > 0 ? -1 : 1);
+      }, { passive: true });
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") closeMomentModal();
+        if (e.key === "ArrowLeft") nextMoment(-1);
+        if (e.key === "ArrowRight") nextMoment(1);
+      });
+
+      const cheatEvents = [
+        [document, "visibilitychange", () => { if (document.hidden || document.visibilityState === "hidden") antiCheatSignal("visibility"); }],
+        [window, "blur", () => antiCheatSignal("blur")],
+        [window, "pagehide", () => antiCheatSignal("pagehide")],
+        [document, "freeze", () => antiCheatSignal("freeze")],
+        [document, "focusout", () => { setTimeout(() => { if (!document.hasFocus()) antiCheatSignal("focusout"); }, 30); }],
+        [document, "mouseleave", (e) => { if (e.clientY <= 0 || e.clientX <= 0 || e.clientX >= window.innerWidth || e.clientY >= window.innerHeight) antiCheatSignal("mouseleave"); }]
+      ];
+      cheatEvents.forEach(([target, event, handler]) => target.addEventListener(event, handler, { passive: true }));
+      window.addEventListener("focus", () => {
+        if (app.state?.status === "playing" && app.cheatLockedRound === app.state.currentRound) {
+          $("anti-cheat-overlay").classList.remove("hidden");
+          $("anti-cheat-overlay").classList.add("flex");
+        }
+      });
+    }
+
+    document.addEventListener("DOMContentLoaded", () => {
+      if (location.protocol === "file:") {
+        console.warn("Futtasd inkább lokális szerverről: python -m http.server 8000. A file:// origin miatt néhány külső API és WebRTC furcsán viselkedhet.");
+        setTimeout(() => toast("Tipp: file:// helyett indítsd lokálisan: python -m http.server 8000"), 700);
+      }
+      wireEvents();
+      initMaps();
+      updateCameraButtons("Opcionális · nincs bekapcsolva", "slate");
+      if (app.playerName) {
+        updateProfileUI();
+        showScreen("screen-menu");
+        initPeer();
+      } else {
+        showScreen("screen-profile");
+      }
+    });
+  </script>
+</body>
+</html>
